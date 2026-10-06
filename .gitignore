@@ -62,3 +62,10 @@ crates/docs_preprocessor/actions.json
 
 .local*
 .cache
+
+# BEGIN: gray local changes
+
+# Don't track notes
+notes/
+
+# END: gray local changes

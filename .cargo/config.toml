@@ -4,6 +4,8 @@ rustflags = ["-C", "symbol-mangling-version=v0", "--cfg", "tokio_unstable"]
 
 [alias]
 xtask = "run --package xtask --"
+zed-build = "build --locked --profile release-fast --package zed --bin zed --package cli --bin cli"
+zed-run = "run --locked --profile release-fast --package zed --bin zed"
 perf-test = ["test", "--profile", "release-fast", "--lib", "--bins", "--tests", "--all-features", "--config", "target.'cfg(true)'.runner='cargo run -p perf --release'", "--config", "target.'cfg(true)'.rustflags=[\"--cfg\", \"perf_enabled\"]"]
 # Keep similar flags here to share some ccache
 perf-compare = ["run", "--profile", "release-fast", "-p", "perf", "--config", "target.'cfg(true)'.rustflags=[\"--cfg\", \"perf_enabled\"]", "--", "compare"]
@@ -22,3 +24,4 @@ rustflags = ["-C", "link-arg=-fuse-ld=lld"]
 
 [env]
 MACOSX_DEPLOYMENT_TARGET = "12.0"
+ZED_UPDATE_EXPLANATION = "Locally built Zed JJ. Update with script/install-local-windows.ps1 in your checkout."
