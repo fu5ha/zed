@@ -6,7 +6,7 @@ use buffer_diff::BufferDiff;
 use collections::HashMap;
 use fs::Fs;
 use futures::{FutureExt as _, StreamExt as _, future::Shared};
-use git::jj::{JjFile, JjReadSession, JjRepository, JjRevision};
+use git::jj::{JjBookmark, JjFile, JjReadSession, JjRepository, JjRevision};
 use git::{
     repository::RepoPath,
     status::{FileStatus, StatusCode},
@@ -26,6 +26,8 @@ pub struct JjSnapshot {
     pub base_files: Arc<HashMap<String, JjFile>>,
     pub current_files: Arc<HashMap<String, JjFile>>,
     pub baseline_error: Option<String>,
+    pub bookmarks: Arc<Vec<JjBookmark>>,
+    pub bookmark_error: Option<String>,
 }
 
 struct LiveDiff {
@@ -133,6 +135,14 @@ impl JjStore {
                 let session = backend.read_session().await?;
                 let sparse = session.sparse_patterns().await?.trim() != ".";
                 let revision = session.revision("@").await?;
+                let (bookmarks, bookmark_error) = match session.bookmarks().await {
+                    Ok(bookmarks) => (Arc::new(bookmarks), None),
+                    Err(error) => {
+                        let error = format!("{error:#}");
+                        log::warn!("jj bookmarks: {error}");
+                        (Arc::new(Vec::new()), Some(error))
+                    }
+                };
                 let current_files = Arc::new(session.files(&revision.commit_id).await?.into_iter().map(|file| (file.path.clone(), file)).collect());
                 let baseline_error = if sparse {
                     Some("jj gutter diffs do not yet support sparse workspaces".into())
@@ -147,7 +157,7 @@ impl JjStore {
                 } else {
                     HashMap::default()
                 });
-                Ok(JjSnapshot { backend, session, revision, base_revision, base_files, current_files, baseline_error })
+                Ok(JjSnapshot { backend, session, revision, base_revision, base_files, current_files, baseline_error, bookmarks, bookmark_error })
             }.await;
             result.map_err(|error| format!("{error:#}"))
         }).shared();
@@ -189,17 +199,80 @@ impl JjStore {
 
     pub fn label(&self) -> String {
         match &self.snapshot {
-            Some(snapshot) => format!(
-                "jj {}",
-                snapshot
-                    .revision
-                    .change_id
-                    .chars()
-                    .take(8)
-                    .collect::<String>()
-            ),
+            Some(snapshot) => {
+                let label = format!(
+                    "jj {}",
+                    snapshot
+                        .revision
+                        .change_id
+                        .chars()
+                        .take(8)
+                        .collect::<String>()
+                );
+                let bookmarks = self.current_bookmarks();
+                if bookmarks.is_empty() {
+                    label
+                } else {
+                    let names = bookmarks
+                        .iter()
+                        .take(2)
+                        .cloned()
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    let remaining = bookmarks.len().saturating_sub(2);
+                    if remaining == 0 {
+                        format!("{label} · {names}")
+                    } else {
+                        format!("{label} · {names} +{remaining}")
+                    }
+                }
+            }
             None if self.error.is_some() => "jj unavailable".into(),
             None => "jj loading".into(),
+        }
+    }
+
+    pub fn current_bookmarks(&self) -> Vec<String> {
+        let Some(snapshot) = &self.snapshot else {
+            return Vec::new();
+        };
+        let mut names = snapshot
+            .bookmarks
+            .iter()
+            .filter(|bookmark| {
+                bookmark.remote.is_none() && bookmark.targets.contains(&snapshot.revision.commit_id)
+            })
+            .map(|bookmark| {
+                if bookmark.conflict {
+                    format!("{} (conflicted)", bookmark.name)
+                } else {
+                    bookmark.name.clone()
+                }
+            })
+            .collect::<Vec<_>>();
+        names.sort();
+        names
+    }
+
+    pub fn bookmark_summary(&self) -> String {
+        if self.snapshot.is_none() {
+            return match &self.error {
+                Some(error) => format!("Bookmarks unavailable: {error}"),
+                None => "Loading bookmarks".into(),
+            };
+        }
+        if let Some(error) = self
+            .snapshot
+            .as_ref()
+            .and_then(|snapshot| snapshot.bookmark_error.as_ref())
+        {
+            return format!("Bookmarks unavailable: {error}");
+        }
+        let names = self.current_bookmarks();
+        if names.is_empty() {
+            "No local bookmarks point to this change".into()
+        } else {
+            format!("Local bookmarks at this change: {}", names.join(", "))
         }
     }
 

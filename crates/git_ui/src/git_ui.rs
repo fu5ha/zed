@@ -49,6 +49,7 @@ pub mod git_panel;
 mod git_panel_settings;
 pub mod git_picker;
 mod git_runtime_diagnostics;
+pub mod jj_bookmark_picker;
 pub mod multi_diff_view;
 pub mod picker_prompt;
 pub mod project_diff;
@@ -78,6 +79,13 @@ pub fn init(cx: &mut App) {
 
     git_ui_core::set_branch_picker_builder(
         |workspace, repository, window, cx| {
+            if let Some(jj) = repository
+                .as_ref()
+                .and_then(|repository| repository.read(cx).jj.clone())
+            {
+                let picker = jj_bookmark_picker::popover(jj, None, window, cx);
+                return cx.new(|cx| git_ui_core::GitPickerPopover::new(picker, cx));
+            }
             let picker = git_picker::popover(
                 workspace,
                 repository,

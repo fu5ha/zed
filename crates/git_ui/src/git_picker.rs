@@ -511,6 +511,19 @@ fn open_with_tab(
 ) {
     let workspace_handle = workspace.weak_handle();
     let repository = workspace.project().read(cx).active_repository(cx);
+    if let Some(jj) = repository
+        .as_ref()
+        .and_then(|repository| repository.read(cx).jj.clone())
+    {
+        if tab == GitPickerTab::Stashes {
+            workspace.show_error("Git stash is unavailable in a jj workspace", cx);
+            return;
+        }
+        workspace.toggle_modal(window, cx, |window, cx| {
+            crate::jj_bookmark_picker::modal(jj, window, cx)
+        });
+        return;
+    }
 
     workspace.toggle_modal(window, cx, |window, cx| {
         GitPicker::new(workspace_handle, repository, tab, rems(34.), window, cx)

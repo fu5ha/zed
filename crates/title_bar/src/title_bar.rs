@@ -1054,7 +1054,7 @@ impl TitleBar {
                 let branch_tooltip_label = branch_name.clone();
                 if let Some(jj) = jj.clone() {
                     let state = jj.read(cx);
-                    let tooltip = state
+                    let description = state
                         .error
                         .clone()
                         .or_else(|| {
@@ -1070,9 +1070,22 @@ impl TitleBar {
                                 .map(|snapshot| snapshot.revision.description.clone())
                                 .unwrap_or_else(|| "Loading current jj change".into())
                         });
-                    return Button::new("jj_current_change", branch_name)
-                        .label_size(LabelSize::Small)
-                        .tooltip(move |_, cx| Tooltip::text(tooltip.clone(), cx))
+                    let tooltip = format!("{description}\n{}", state.bookmark_summary());
+                    return PopoverMenu::new("jj-bookmarks")
+                        .menu(move |window, cx| {
+                            git_ui_core::build_branch_picker(
+                                workspace.downgrade(),
+                                effective_repository.clone(),
+                                window,
+                                cx,
+                            )
+                        })
+                        .trigger_with_tooltip(
+                            Button::new("jj_current_change", branch_name)
+                                .label_size(LabelSize::Small),
+                            Tooltip::text(tooltip),
+                        )
+                        .anchor(gpui::Anchor::TopLeft)
                         .into_any_element();
                 }
                 let (branch_icon, branch_icon_color) = if settings.show_branch_status_icon {

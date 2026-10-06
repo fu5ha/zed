@@ -9567,6 +9567,8 @@ impl Render for GitPanel {
         {
             let state = jj.read(cx);
             let label = state.label();
+            let bookmark_summary = state.bookmark_summary();
+            let bookmark_store = jj.clone();
             let description = state
                 .error
                 .clone()
@@ -9596,6 +9598,23 @@ impl Render for GitPanel {
                         Label::new(format!("jj snapshot failed: {error}")).color(Color::Error),
                     )
                 })
+                .child(
+                    Label::new(bookmark_summary)
+                        .size(LabelSize::Small)
+                        .color(Color::Muted),
+                )
+                .child(
+                    PopoverMenu::new("jj_panel_bookmarks")
+                        .menu(move |window, cx| {
+                            Some(crate::jj_bookmark_picker::popover(
+                                bookmark_store.clone(),
+                                None,
+                                window,
+                                cx,
+                            ))
+                        })
+                        .trigger(Button::new("jj_browse_bookmarks", "Browse bookmarks")),
+                )
                 .child(
                     Button::new("jj_snapshot", "Snapshot working copy")
                         .disabled(state.snapshot.is_none())
