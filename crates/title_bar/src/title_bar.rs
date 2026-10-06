@@ -496,6 +496,7 @@ impl TitleBar {
         subscriptions.push(
             cx.subscribe(&git_store, move |_, _, event, cx| match event {
                 GitStoreEvent::ActiveRepositoryChanged(_)
+                | GitStoreEvent::DiffBaseChanged(_)
                 | GitStoreEvent::RepositoryUpdated(_, _, true) => {
                     cx.notify();
                 }
@@ -947,26 +948,28 @@ impl TitleBar {
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
         let workspace = self.workspace.upgrade()?;
+        let jj = repository.read(cx).jj.clone();
 
         let (branch_name, icon_info, is_detached_head) = {
             let repo = repository.read(cx);
 
-            let is_detached_head = repo.branch.is_none();
+            let is_detached_head = jj.is_none() && repo.branch.is_none();
 
-            let branch_name = repo
-                .branch
-                .as_ref()
-                .map(|branch| branch.name())
-                .map(|name| util::truncate_and_trailoff(name, MAX_BRANCH_NAME_LENGTH))
-                .or_else(|| {
-                    repo.head_commit.as_ref().map(|commit| {
-                        commit
-                            .sha
-                            .chars()
-                            .take(MAX_SHORT_SHA_LENGTH)
-                            .collect::<String>()
+            let branch_name = jj.as_ref().map(|jj| jj.read(cx).label()).or_else(|| {
+                repo.branch
+                    .as_ref()
+                    .map(|branch| branch.name())
+                    .map(|name| util::truncate_and_trailoff(name, MAX_BRANCH_NAME_LENGTH))
+                    .or_else(|| {
+                        repo.head_commit.as_ref().map(|commit| {
+                            commit
+                                .sha
+                                .chars()
+                                .take(MAX_SHORT_SHA_LENGTH)
+                                .collect::<String>()
+                        })
                     })
-                });
+            });
 
             let status = repo.status_summary();
             let tracked = status.index + status.worktree;
@@ -1049,6 +1052,29 @@ impl TitleBar {
         let branch_picker = branch_name.and_then(|branch_name| {
             settings.show_branch_name.then(|| {
                 let branch_tooltip_label = branch_name.clone();
+                if let Some(jj) = jj.clone() {
+                    let state = jj.read(cx);
+                    let tooltip = state
+                        .error
+                        .clone()
+                        .or_else(|| {
+                            state
+                                .snapshot
+                                .as_ref()
+                                .and_then(|snapshot| snapshot.baseline_error.clone())
+                        })
+                        .unwrap_or_else(|| {
+                            state
+                                .snapshot
+                                .as_ref()
+                                .map(|snapshot| snapshot.revision.description.clone())
+                                .unwrap_or_else(|| "Loading current jj change".into())
+                        });
+                    return Button::new("jj_current_change", branch_name)
+                        .label_size(LabelSize::Small)
+                        .tooltip(move |_, cx| Tooltip::text(tooltip.clone(), cx))
+                        .into_any_element();
+                }
                 let (branch_icon, branch_icon_color) = if settings.show_branch_status_icon {
                     icon_info
                 } else {
@@ -1101,6 +1127,7 @@ impl TitleBar {
                         )
                     })
                     .anchor(gpui::Anchor::TopLeft)
+                    .into_any_element()
             })
         });
 

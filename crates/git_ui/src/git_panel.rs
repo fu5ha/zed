@@ -1501,9 +1501,8 @@ impl GitPanel {
                             .ok();
                     }
                     GitStoreEvent::RepositoryUpdated(_, _, _) => {}
-                    GitStoreEvent::JobsUpdated
-                    | GitStoreEvent::ConflictsUpdated
-                    | GitStoreEvent::DiffBaseChanged(_) => {}
+                    GitStoreEvent::JobsUpdated | GitStoreEvent::ConflictsUpdated => {}
+                    GitStoreEvent::DiffBaseChanged(_) => cx.notify(),
                 },
             )
             .detach();
@@ -2950,6 +2949,9 @@ impl GitPanel {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if !self.has_write_access(cx) {
+            return;
+        }
         let paths = self.selected_ignorable_paths();
         if paths.is_empty() {
             return;
@@ -2988,6 +2990,9 @@ impl GitPanel {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if !self.has_write_access(cx) {
+            return;
+        }
         let paths = self.selected_ignorable_paths();
         if paths.is_empty() {
             return;
@@ -3027,6 +3032,9 @@ impl GitPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if !self.has_write_access(cx) {
+            return;
+        }
         if targets.is_empty() {
             return;
         }
@@ -3327,6 +3335,9 @@ impl GitPanel {
     }
 
     fn clean_all(&mut self, _: &TrashUntrackedFiles, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.has_write_access(cx) {
+            return;
+        }
         let workspace = self.workspace.clone();
         let Some(active_repo) = self.active_repository.clone() else {
             return;
@@ -9305,6 +9316,10 @@ impl GitPanel {
 
     fn has_write_access(&self, cx: &App) -> bool {
         !self.project.read(cx).is_read_only(cx)
+            && !self
+                .active_repository
+                .as_ref()
+                .is_some_and(|repository| repository.read(cx).jj.is_some())
     }
 
     pub fn load_commit_template(
@@ -9545,6 +9560,60 @@ impl GitPanel {
 
 impl Render for GitPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if let Some(jj) = self
+            .active_repository
+            .as_ref()
+            .and_then(|repository| repository.read(cx).jj.clone())
+        {
+            let state = jj.read(cx);
+            let label = state.label();
+            let description = state
+                .error
+                .clone()
+                .or_else(|| {
+                    state
+                        .snapshot
+                        .as_ref()
+                        .and_then(|snapshot| snapshot.baseline_error.clone())
+                })
+                .unwrap_or_else(|| {
+                    state
+                        .snapshot
+                        .as_ref()
+                        .map(|snapshot| snapshot.revision.description.clone())
+                        .unwrap_or_else(|| "Loading jj workspace".into())
+                });
+            return v_flex()
+                .id("jj_panel")
+                .track_focus(&self.focus_handle)
+                .size_full()
+                .p_3()
+                .gap_3()
+                .child(Label::new(label))
+                .child(Label::new(description))
+                .when_some(state.snapshot_error.clone(), |panel, error| {
+                    panel.child(
+                        Label::new(format!("jj snapshot failed: {error}")).color(Color::Error),
+                    )
+                })
+                .child(
+                    Button::new("jj_snapshot", "Snapshot working copy")
+                        .disabled(state.snapshot.is_none())
+                        .tooltip(Tooltip::text(
+                            "Snapshots files on disk. Does not save editor buffers.",
+                        ))
+                        .on_click(move |_, window, cx| {
+                            jj.update(cx, |jj, cx| jj.snapshot_working_copy(cx))
+                                .detach_and_prompt_err(
+                                    "Failed to snapshot jj working copy",
+                                    window,
+                                    cx,
+                                    |_, _, _| None,
+                                );
+                        }),
+                )
+                .into_any_element();
+        }
         let project = self.project.read(cx);
         let has_entries = !self.entries.is_empty();
         let has_write_access = self.has_write_access(cx);
@@ -9680,6 +9749,7 @@ impl Render for GitPanel {
                 )
                 .with_priority(1)
             }))
+            .into_any_element()
     }
 }
 

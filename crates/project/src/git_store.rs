@@ -215,7 +215,7 @@ fn pending_hunks(
         .collect()
 }
 
-fn decode_git_text(bytes: Vec<u8>) -> Result<String> {
+pub(crate) fn decode_git_text(bytes: Vec<u8>) -> Result<String> {
     let text = decode_text(bytes)?.text;
     anyhow::ensure!(
         !is_binary_content(text.as_bytes()),
@@ -682,6 +682,7 @@ pub enum UnshallowState {
 }
 
 pub struct Repository {
+    pub jj: Option<Entity<crate::jj_store::JjStore>>,
     this: WeakEntity<Self>,
     snapshot: RepositorySnapshot,
     unshallow_state: UnshallowState,
@@ -1764,6 +1765,14 @@ impl GitStore {
         buffer: Entity<Buffer>,
         cx: &mut Context<Self>,
     ) -> Task<Result<Entity<BufferDiff>>> {
+        if let Some((repository, path)) =
+            self.repository_and_path_for_buffer_id(buffer.read(cx).remote_id(), cx)
+            && let Some(jj) = repository.read(cx).jj.clone()
+        {
+            return jj.update(cx, |jj, cx| {
+                jj.open_diff(path.as_unix_str().to_owned(), buffer, cx)
+            });
+        }
         let mut branch_base = None;
         if self.diff_base == GitDiffBaseSetting::DefaultBranch
             && let Some((repo, repo_path)) =
@@ -2944,9 +2953,13 @@ impl GitStore {
             {
                 if let Some(repo) = self.repositories.get(repo_id) {
                     let repository_state = repo.read(cx).repository_state.clone();
-                    cx.background_spawn(async move {
+                    let jj = repo.read(cx).jj.clone();
+                    cx.spawn(async move |_, cx| {
                         if let Ok(RepositoryState::Local(state)) = repository_state.await {
                             state.backend.set_trusted(is_trusted);
+                            if let Some(jj) = jj {
+                                jj.update(cx, |jj, cx| jj.refresh(cx));
+                            }
                         }
                     })
                     .detach();
@@ -2965,6 +2978,9 @@ impl GitStore {
             BufferStoreEvent::BufferAdded(buffer) => {
                 self.activate_parked_repositories_for_buffer(buffer, cx);
                 cx.subscribe(buffer, |this, buffer, event, cx| {
+                    if matches!(event, BufferEvent::Saved) {
+                        this.snapshot_jj_for_saved_buffer(&buffer, cx);
+                    }
                     if let BufferEvent::LanguageChanged(_) = event {
                         let buffer_id = buffer.read(cx).remote_id();
                         if let Some(diff_state) = this.diffs.get(&buffer_id) {
@@ -3033,6 +3049,35 @@ impl GitStore {
                     .detach();
                 }
             }
+        }
+    }
+
+    fn snapshot_jj_for_saved_buffer(&mut self, buffer: &Entity<Buffer>, cx: &mut Context<Self>) {
+        if !matches!(self.state, GitStoreState::Local { .. }) {
+            return;
+        }
+        let Some(file) = File::from_dyn(buffer.read(cx).file()) else {
+            return;
+        };
+        if !file.worktree.read(cx).is_local() {
+            return;
+        }
+        let path = file.worktree.read(cx).absolutize(&file.path);
+        self.activate_parked_repositories_for_buffer(buffer, cx);
+        let repository = self
+            .repositories
+            .values()
+            .filter(|repository| path.starts_with(&repository.read(cx).work_directory_abs_path))
+            .max_by_key(|repository| {
+                repository
+                    .read(cx)
+                    .work_directory_abs_path
+                    .components()
+                    .count()
+            });
+        // Select the owner before checking jj, so a nested Git-only repository never snapshots its parent.
+        if let Some(jj) = repository.and_then(|repository| repository.read(cx).jj.clone()) {
+            jj.update(cx, |jj, cx| jj.request_snapshot_working_copy(cx));
         }
     }
 
@@ -4918,15 +4963,20 @@ impl GitStore {
 
     pub fn display_repo_snapshots(&self, cx: &App) -> HashMap<RepositoryId, RepositorySnapshot> {
         let mut snapshots = self.repo_snapshots(cx);
-        if self.diff_base == GitDiffBaseSetting::Head {
-            return snapshots;
-        }
         for (id, snapshot) in &mut snapshots {
-            if let Some(statuses) = self
-                .display_diffs
+            if let Some(jj) = self
+                .repositories
                 .get(id)
-                .and_then(|state| state.buffers.as_ref())
-                .and_then(|(buffers, _)| buffers.read(cx).statuses_by_path())
+                .and_then(|repository| repository.read(cx).jj.as_ref())
+            {
+                snapshot.statuses_by_path =
+                    SumTree::from_iter(jj.read(cx).display_statuses(cx), ());
+            } else if self.diff_base == GitDiffBaseSetting::DefaultBranch
+                && let Some(statuses) = self
+                    .display_diffs
+                    .get(id)
+                    .and_then(|state| state.buffers.as_ref())
+                    .and_then(|(buffers, _)| buffers.read(cx).statuses_by_path())
             {
                 snapshot.statuses_by_path = statuses;
             }
@@ -4977,6 +5027,9 @@ impl GitStore {
         repo_path: &RepoPath,
         cx: &App,
     ) -> Option<FileStatus> {
+        if let Some(jj) = &repo.read(cx).jj {
+            return jj.read(cx).status_for_path(repo_path.as_unix_str(), cx);
+        }
         if self.diff_base == GitDiffBaseSetting::DefaultBranch
             && let Some((buffers, _)) = self
                 .display_diffs
@@ -5050,6 +5103,9 @@ impl GitStore {
         let Some(repo) = self.repositories.get(&repo_id).cloned() else {
             return;
         };
+        if repo.read(cx).jj.is_some() {
+            return;
+        }
 
         let task = cx.spawn(async move |this, cx| {
             let result: Result<Option<SharedString>> =
@@ -6400,6 +6456,11 @@ impl Repository {
                 Ok(RepositoryState::Local(state))
             })
             .shared();
+        if let Some(jj) = &self.jj {
+            jj.update(cx, |jj, cx| {
+                jj.set_repository_state(self.repository_state.clone(), cx)
+            });
+        }
     }
 
     fn reinitialize_local_backend(
@@ -6443,6 +6504,7 @@ impl Repository {
         );
 
         let mut repo = Repository {
+            jj: None,
             this: cx.weak_entity(),
             git_store,
             object_read_limiter,
@@ -6463,7 +6525,19 @@ impl Repository {
             commit_data: Default::default(),
             commit_data_handler: CommitDataHandlerState::Closed,
         };
-        repo.respawn_local_worker(project_environment, fs, is_trusted, cx);
+        repo.respawn_local_worker(project_environment, fs.clone(), is_trusted, cx);
+        if fs.path_exists(&repo.work_directory_abs_path.join(".jj")) {
+            repo.jj = Some(cx.new(|cx| {
+                crate::jj_store::JjStore::new(
+                    repo.work_directory_abs_path.to_path_buf(),
+                    id,
+                    repo.git_store.clone(),
+                    repo.repository_state.clone(),
+                    fs,
+                    cx,
+                )
+            }));
+        }
         cx.subscribe_self(Self::handle_subscribe_self).detach();
         repo
     }
@@ -6495,6 +6569,7 @@ impl Repository {
         cx.subscribe_self(Self::handle_subscribe_self).detach();
 
         Self {
+            jj: None,
             this: cx.weak_entity(),
             snapshot,
             unshallow_state: UnshallowState::default(),
@@ -7900,6 +7975,9 @@ impl Repository {
         entries: Vec<RepoPath>,
         cx: &mut Context<Self>,
     ) -> Task<anyhow::Result<()>> {
+        if self.jj.is_some() {
+            return Task::ready(Err(anyhow!("Git staging is disabled in jj workspaces")));
+        }
         if entries.is_empty() {
             return Task::ready(Ok(()));
         }

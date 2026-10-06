@@ -177,6 +177,11 @@ impl JjReadSession {
             .await
     }
 
+    pub async fn sparse_patterns(&self) -> Result<String> {
+        String::from_utf8(self.command(&["sparse", "list"]).await?)
+            .context("invalid jj sparse patterns")
+    }
+
     pub async fn file_contents(&self, revision: &str, path: &str) -> Result<Vec<u8>> {
         let fileset = format!("root-file:{}", serde_json::to_string(path)?);
         self.command(&["file", "show", "-r", revision, "-T", "", &fileset])

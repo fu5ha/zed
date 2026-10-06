@@ -96,6 +96,17 @@ fn normalize_git_metadata_path(path: PathBuf) -> Result<PathBuf> {
         .map_err(|_| anyhow!("git metadata path escapes its filesystem root: {path:?}"))
 }
 
+fn ensure_git_mutation_allowed_at(working_directory: &Path) -> Result<()> {
+    let jj_path = working_directory.join(".jj");
+    anyhow::ensure!(
+        !jj_path
+            .try_exists()
+            .with_context(|| format!("failed to check {}", jj_path.display()))?,
+        "Git mutations are disabled for Jujutsu repositories. Use jj instead."
+    );
+    Ok(())
+}
+
 /// Commit data needed for the git graph visualization.
 #[derive(Debug, Clone)]
 pub struct CommitData {
@@ -1270,6 +1281,13 @@ impl RealGitRepository {
             .context("bare repositories do not have a working directory")
     }
 
+    fn ensure_git_mutation_allowed(&self) -> Result<()> {
+        if let Some(working_directory) = &self.working_directory {
+            ensure_git_mutation_allowed_at(working_directory)?;
+        }
+        Ok(())
+    }
+
     fn command_directory(&self) -> PathBuf {
         self.working_directory
             .clone()
@@ -1297,6 +1315,9 @@ impl RealGitRepository {
     }
 
     fn edit_ref(&self, edit: RefEdit) -> BoxFuture<'_, Result<()>> {
+        if let Err(error) = self.ensure_git_mutation_allowed() {
+            return futures::future::ready(Err(error)).boxed();
+        }
         let git_binary = self.git_binary();
         self.executor
             .spawn(async move {
@@ -1556,6 +1577,9 @@ impl GitRepository for RealGitRepository {
         mode: ResetMode,
         env: Arc<HashMap<String, String>>,
     ) -> BoxFuture<'_, Result<()>> {
+        if let Err(error) = self.ensure_git_mutation_allowed() {
+            return futures::future::ready(Err(error)).boxed();
+        }
         let git = self.git_binary_in_worktree();
         async move {
             let git = git?;
@@ -1585,6 +1609,9 @@ impl GitRepository for RealGitRepository {
         paths: Vec<RepoPath>,
         env: Arc<HashMap<String, String>>,
     ) -> BoxFuture<'_, Result<()>> {
+        if let Err(error) = self.ensure_git_mutation_allowed() {
+            return futures::future::ready(Err(error)).boxed();
+        }
         let git = self.git_binary_in_worktree();
         async move {
             let git = git?;
@@ -1681,6 +1708,9 @@ impl GitRepository for RealGitRepository {
         env: Arc<HashMap<String, String>>,
         is_executable: bool,
     ) -> BoxFuture<'_, anyhow::Result<()>> {
+        if let Err(error) = self.ensure_git_mutation_allowed() {
+            return futures::future::ready(Err(error)).boxed();
+        }
         let git = self.git_binary();
         self.executor
             .spawn(async move {
@@ -2279,6 +2309,9 @@ impl GitRepository for RealGitRepository {
         target: CreateWorktreeTarget,
         path: PathBuf,
     ) -> BoxFuture<'_, Result<()>> {
+        if let Err(error) = self.ensure_git_mutation_allowed() {
+            return futures::future::ready(Err(error)).boxed();
+        }
         let git = self.git_binary();
         let mut args = vec![OsString::from("worktree"), OsString::from("add")];
 
@@ -2323,6 +2356,12 @@ impl GitRepository for RealGitRepository {
     }
 
     fn remove_worktree(&self, path: PathBuf, force: bool) -> BoxFuture<'_, Result<()>> {
+        if let Err(error) = self
+            .ensure_git_mutation_allowed()
+            .and_then(|()| ensure_git_mutation_allowed_at(&path))
+        {
+            return futures::future::ready(Err(error)).boxed();
+        }
         let git = self.git_binary();
 
         self.executor
@@ -2340,6 +2379,12 @@ impl GitRepository for RealGitRepository {
     }
 
     fn rename_worktree(&self, old_path: PathBuf, new_path: PathBuf) -> BoxFuture<'_, Result<()>> {
+        if let Err(error) = self
+            .ensure_git_mutation_allowed()
+            .and_then(|()| ensure_git_mutation_allowed_at(&old_path))
+        {
+            return futures::future::ready(Err(error)).boxed();
+        }
         let git = self.git_binary();
 
         self.executor
@@ -2363,6 +2408,12 @@ impl GitRepository for RealGitRepository {
         worktree_path: PathBuf,
         create: bool,
     ) -> BoxFuture<'_, Result<()>> {
+        if let Err(error) = self
+            .ensure_git_mutation_allowed()
+            .and_then(|()| ensure_git_mutation_allowed_at(&worktree_path))
+        {
+            return futures::future::ready(Err(error)).boxed();
+        }
         let git_binary = GitBinary::new(
             self.any_git_binary_path.clone(),
             worktree_path,
@@ -2384,6 +2435,9 @@ impl GitRepository for RealGitRepository {
     }
 
     fn change_branch(&self, name: String) -> BoxFuture<'_, Result<()>> {
+        if let Err(error) = self.ensure_git_mutation_allowed() {
+            return futures::future::ready(Err(error)).boxed();
+        }
         let git_binary = self.git_binary_in_worktree();
         self.executor
             .spawn(async move {
@@ -2442,6 +2496,9 @@ impl GitRepository for RealGitRepository {
         name: String,
         base_branch: Option<String>,
     ) -> BoxFuture<'_, Result<()>> {
+        if let Err(error) = self.ensure_git_mutation_allowed() {
+            return futures::future::ready(Err(error)).boxed();
+        }
         let git_binary = self.git_binary_in_worktree();
 
         self.executor
@@ -2461,6 +2518,9 @@ impl GitRepository for RealGitRepository {
     }
 
     fn rename_branch(&self, branch: String, new_name: String) -> BoxFuture<'_, Result<()>> {
+        if let Err(error) = self.ensure_git_mutation_allowed() {
+            return futures::future::ready(Err(error)).boxed();
+        }
         let git_binary = self.git_binary_in_worktree();
 
         self.executor
@@ -2480,6 +2540,9 @@ impl GitRepository for RealGitRepository {
         name: String,
         force: bool,
     ) -> BoxFuture<'_, Result<()>> {
+        if let Err(error) = self.ensure_git_mutation_allowed() {
+            return futures::future::ready(Err(error)).boxed();
+        }
         let git_binary = self.git_binary_in_worktree();
 
         self.executor
@@ -2587,6 +2650,9 @@ impl GitRepository for RealGitRepository {
         paths: Vec<RepoPath>,
         env: Arc<HashMap<String, String>>,
     ) -> BoxFuture<'_, Result<()>> {
+        if let Err(error) = self.ensure_git_mutation_allowed() {
+            return futures::future::ready(Err(error)).boxed();
+        }
         let git = self.git_binary_in_worktree();
         self.executor
             .spawn(async move {
@@ -2614,6 +2680,9 @@ impl GitRepository for RealGitRepository {
         paths: Vec<RepoPath>,
         env: Arc<HashMap<String, String>>,
     ) -> BoxFuture<'_, Result<()>> {
+        if let Err(error) = self.ensure_git_mutation_allowed() {
+            return futures::future::ready(Err(error)).boxed();
+        }
         let git = self.git_binary_in_worktree();
 
         self.executor
@@ -2644,6 +2713,9 @@ impl GitRepository for RealGitRepository {
         message: Option<String>,
         env: Arc<HashMap<String, String>>,
     ) -> BoxFuture<'_, Result<()>> {
+        if let Err(error) = self.ensure_git_mutation_allowed() {
+            return futures::future::ready(Err(error)).boxed();
+        }
         let git = self.git_binary_in_worktree();
         self.executor
             .spawn(async move {
@@ -2675,6 +2747,9 @@ impl GitRepository for RealGitRepository {
         message: Option<String>,
         env: Arc<HashMap<String, String>>,
     ) -> BoxFuture<'_, Result<()>> {
+        if let Err(error) = self.ensure_git_mutation_allowed() {
+            return futures::future::ready(Err(error)).boxed();
+        }
         let git = self.git_binary_in_worktree();
         self.executor
             .spawn(async move {
@@ -2702,6 +2777,9 @@ impl GitRepository for RealGitRepository {
         index: Option<usize>,
         env: Arc<HashMap<String, String>>,
     ) -> BoxFuture<'_, Result<()>> {
+        if let Err(error) = self.ensure_git_mutation_allowed() {
+            return futures::future::ready(Err(error)).boxed();
+        }
         let git = self.git_binary_in_worktree();
         self.executor
             .spawn(async move {
@@ -2727,6 +2805,9 @@ impl GitRepository for RealGitRepository {
         index: Option<usize>,
         env: Arc<HashMap<String, String>>,
     ) -> BoxFuture<'_, Result<()>> {
+        if let Err(error) = self.ensure_git_mutation_allowed() {
+            return futures::future::ready(Err(error)).boxed();
+        }
         let git = self.git_binary_in_worktree();
         self.executor
             .spawn(async move {
@@ -2752,6 +2833,9 @@ impl GitRepository for RealGitRepository {
         index: Option<usize>,
         env: Arc<HashMap<String, String>>,
     ) -> BoxFuture<'_, Result<()>> {
+        if let Err(error) = self.ensure_git_mutation_allowed() {
+            return futures::future::ready(Err(error)).boxed();
+        }
         let git = self.git_binary_in_worktree();
         self.executor
             .spawn(async move {
@@ -2780,6 +2864,9 @@ impl GitRepository for RealGitRepository {
         ask_pass: AskPassDelegate,
         env: Arc<HashMap<String, String>>,
     ) -> BoxFuture<'_, Result<()>> {
+        if let Err(error) = self.ensure_git_mutation_allowed() {
+            return futures::future::ready(Err(error)).boxed();
+        }
         let git = self.git_binary_in_worktree();
         let executor = self.executor.clone();
         // Note: Do not spawn this command on the background thread, it might pop open the credential helper
@@ -2833,6 +2920,9 @@ impl GitRepository for RealGitRepository {
     }
 
     fn repair_worktrees(&self) -> BoxFuture<'_, Result<()>> {
+        if let Err(error) = self.ensure_git_mutation_allowed() {
+            return futures::future::ready(Err(error)).boxed();
+        }
         let git = self.git_binary();
         self.executor
             .spawn(async move {
@@ -2853,6 +2943,9 @@ impl GitRepository for RealGitRepository {
         env: Arc<HashMap<String, String>>,
         cx: AsyncApp,
     ) -> BoxFuture<'_, Result<RemoteCommandOutput>> {
+        if let Err(error) = self.ensure_git_mutation_allowed() {
+            return futures::future::ready(Err(error)).boxed();
+        }
         let working_directory = self.command_directory();
         let git_directory = self.path();
         let executor = cx.background_executor().clone();
@@ -2896,6 +2989,9 @@ impl GitRepository for RealGitRepository {
         env: Arc<HashMap<String, String>>,
         cx: AsyncApp,
     ) -> BoxFuture<'_, Result<RemoteCommandOutput>> {
+        if let Err(error) = self.ensure_git_mutation_allowed() {
+            return futures::future::ready(Err(error)).boxed();
+        }
         let working_directory = self.command_directory();
         let git_directory = self.path();
         let executor = cx.background_executor().clone();
@@ -2937,6 +3033,9 @@ impl GitRepository for RealGitRepository {
         env: Arc<HashMap<String, String>>,
         cx: AsyncApp,
     ) -> BoxFuture<'_, Result<RemoteCommandOutput>> {
+        if let Err(error) = self.ensure_git_mutation_allowed() {
+            return futures::future::ready(Err(error)).boxed();
+        }
         let working_directory = self.command_directory();
         let git_directory = self.path();
         let remote_name = format!("{}", fetch_options);
@@ -3040,6 +3139,9 @@ impl GitRepository for RealGitRepository {
     }
 
     fn remove_remote(&self, name: String) -> BoxFuture<'_, Result<()>> {
+        if let Err(error) = self.ensure_git_mutation_allowed() {
+            return futures::future::ready(Err(error)).boxed();
+        }
         let git_binary = self.git_binary();
         self.executor
             .spawn(async move {
@@ -3050,6 +3152,9 @@ impl GitRepository for RealGitRepository {
     }
 
     fn create_remote(&self, name: String, url: String) -> BoxFuture<'_, Result<()>> {
+        if let Err(error) = self.ensure_git_mutation_allowed() {
+            return futures::future::ready(Err(error)).boxed();
+        }
         let git_binary = self.git_binary();
         self.executor
             .spawn(async move {
@@ -3091,6 +3196,9 @@ impl GitRepository for RealGitRepository {
     }
 
     fn create_archive_checkpoint(&self) -> BoxFuture<'_, Result<(String, String)>> {
+        if let Err(error) = self.ensure_git_mutation_allowed() {
+            return futures::future::ready(Err(error)).boxed();
+        }
         let git = self.git_binary_in_worktree();
         self.executor
             .spawn(async move {
@@ -3148,6 +3256,9 @@ impl GitRepository for RealGitRepository {
         staged_sha: String,
         unstaged_sha: String,
     ) -> BoxFuture<'_, Result<()>> {
+        if let Err(error) = self.ensure_git_mutation_allowed() {
+            return futures::future::ready(Err(error)).boxed();
+        }
         let git = self.git_binary_in_worktree();
         self.executor
             .spawn(async move {
@@ -3243,6 +3354,9 @@ impl GitRepository for RealGitRepository {
         hook: RunHook,
         env: Arc<HashMap<String, String>>,
     ) -> BoxFuture<'_, Result<()>> {
+        if let Err(error) = self.ensure_git_mutation_allowed() {
+            return futures::future::ready(Err(error)).boxed();
+        }
         let git_binary = self.git_binary_in_worktree();
         let git_dir = self.git_dir.clone();
         let help_output = self.any_git_binary_help_output();

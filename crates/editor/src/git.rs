@@ -1598,6 +1598,9 @@ impl Editor {
             .iter()
             .map(|s| s.range())
             .collect();
+        if self.staging_ranges_include_jj(&ranges, cx) {
+            return;
+        }
         let task = self.save_buffers_for_ranges_if_needed(&ranges, cx);
         cx.spawn_in(window, async move |this, cx| {
             task.await?;
@@ -2090,6 +2093,9 @@ impl Editor {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.staging_ranges_include_jj(&ranges, cx) {
+            return;
+        }
         let task = self.save_buffers_for_ranges_if_needed(&ranges, cx);
         cx.spawn_in(window, async move |this, cx| {
             task.await?;
@@ -2179,6 +2185,25 @@ impl Editor {
         self.apply_restore(hunks, window, cx);
     }
 
+    fn staging_ranges_include_jj(&self, ranges: &[Range<Anchor>], cx: &App) -> bool {
+        let Some(project) = &self.project else {
+            return false;
+        };
+        let git_store = project.read(cx).git_store().read(cx);
+        let multibuffer = self.buffer.read(cx);
+        let snapshot = multibuffer.read(cx);
+        ranges.iter().any(|range| {
+            snapshot
+                .buffer_ids_for_range(range.clone())
+                .into_iter()
+                .any(|buffer_id| {
+                    git_store
+                        .repository_and_path_for_buffer_id(buffer_id, cx)
+                        .is_some_and(|(repository, _)| repository.read(cx).jj.is_some())
+                })
+        })
+    }
+
     fn save_buffers_for_ranges_if_needed(
         &mut self,
         ranges: &[Range<Anchor>],
@@ -2217,6 +2242,9 @@ impl Editor {
         cx: &mut Context<Self>,
     ) {
         let ranges = self.selections.disjoint_anchor_ranges().collect::<Vec<_>>();
+        if self.staging_ranges_include_jj(&ranges, cx) {
+            return;
+        }
 
         if ranges.iter().any(|range| range.start != range.end) {
             self.stage_or_unstage_diff_hunks(stage, ranges, window, cx);

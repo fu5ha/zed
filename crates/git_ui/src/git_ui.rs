@@ -63,6 +63,14 @@ pub mod unstaged_diff;
 pub use blame_ui::GitBlameStatus;
 pub use conflict_view::MergeConflictIndicator;
 
+gpui::actions!(
+    jj,
+    [
+        /// Snapshot saved working-copy contents into the current jj change without saving editor buffers.
+        SnapshotWorkingCopy,
+    ]
+);
+
 pub fn init(cx: &mut App) {
     editor::set_blame_renderer(blame_ui::GitBlameRenderer, cx);
     commit_view::init(cx);
@@ -116,6 +124,81 @@ pub fn init(cx: &mut App) {
         git_panel::register(workspace);
         repository_selector::register(workspace);
         git_picker::register(workspace);
+        let git_store = workspace.project().read(cx).git_store().clone();
+            git_graph::open_or_reuse_graph(
+                workspace, repo_id, git_store, log_source, None, window, cx,
+            );
+        },
+        cx,
+    );
+
+    cx.observe_new(|editor: &mut Editor, _, cx| {
+        conflict_view::register_editor(editor, editor.buffer().clone(), cx);
+    })
+    .detach();
+
+    cx.observe_new(|workspace: &mut Workspace, _, cx| {
+        ProjectDiff::register(workspace, cx);
+        staged_diff::StagedDiff::register(workspace, cx);
+        unstaged_diff::UnstagedDiff::register(workspace, cx);
+        branch_diff::BranchDiff::register(workspace, cx);
+        CommitModal::register(workspace);
+        git_panel::register(workspace);
+        repository_selector::register(workspace);
+        git_picker::register(workspace);
+        let git_store = workspace.project().read(cx).git_store().clone();
+        let mut snapshot_errors = collections::HashMap::default();
+        cx.subscribe(&git_store, move |workspace, git_store, event, cx| {
+            let project::git_store::GitStoreEvent::RepositoryUpdated(repository_id, _, _) = event
+            else {
+                return;
+            };
+            let repository = git_store
+                .read(cx)
+                .repositories()
+                .get(repository_id)
+                .cloned();
+            let error = repository
+                .as_ref()
+                .and_then(|repository| repository.read(cx).jj.as_ref())
+                .and_then(|jj| jj.read(cx).snapshot_error.clone());
+            if let Some(error) = error {
+                if snapshot_errors.get(repository_id) != Some(&error) {
+                    snapshot_errors.insert(*repository_id, error.clone());
+                    let root = repository
+                        .map(|repository| repository.read(cx).work_directory_abs_path.clone());
+                    workspace.show_error(
+                        format!(
+                        "Failed to snapshot jj working copy{}: {error}. Saved files remain on disk.",
+                            root.map(|root| format!(" ({})", root.display()))
+                                .unwrap_or_default()
+                        ),
+                        cx,
+                    );
+                }
+            } else {
+                snapshot_errors.remove(repository_id);
+            }
+        })
+        .detach();
+        workspace.register_action(|workspace, _: &SnapshotWorkingCopy, window, cx| {
+            let Some(jj) = workspace
+                .project()
+                .read(cx)
+                .active_repository(cx)
+                .and_then(|repository| repository.read(cx).jj.clone())
+            else {
+                workspace.show_error("The active repository is not a local jj workspace", cx);
+                return;
+            };
+            jj.update(cx, |jj, cx| jj.snapshot_working_copy(cx))
+                .detach_and_prompt_err(
+                    "Failed to snapshot jj working copy",
+                    window,
+                    cx,
+                    |_, _, _| None,
+                );
+        });
 
         workspace.register_action(
             |workspace, action: &zed_actions::CreateWorktree, window, cx| {
