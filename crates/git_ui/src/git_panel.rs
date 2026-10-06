@@ -9569,6 +9569,9 @@ impl Render for GitPanel {
             let label = state.label();
             let bookmark_summary = state.bookmark_summary();
             let bookmark_store = jj.clone();
+            let bookmark_workspace = self.workspace.clone();
+            let new_change_store = jj.clone();
+            let new_change_workspace = self.workspace.clone();
             let description = state
                 .error
                 .clone()
@@ -9606,14 +9609,37 @@ impl Render for GitPanel {
                 .child(
                     PopoverMenu::new("jj_panel_bookmarks")
                         .menu(move |window, cx| {
-                            Some(crate::jj_bookmark_picker::popover(
+                            Some(crate::jj_bookmark_picker::switch_popover(
                                 bookmark_store.clone(),
-                                None,
+                                bookmark_workspace.clone(),
                                 window,
                                 cx,
                             ))
                         })
-                        .trigger(Button::new("jj_browse_bookmarks", "Browse bookmarks")),
+                        .trigger(Button::new("jj_browse_bookmarks", "Switch change…")),
+                )
+                .child(
+                    Button::new("jj_new_change", "New change")
+                        .disabled(state.snapshot.is_none())
+                        .tooltip(Tooltip::text(
+                            "Create a new jj change on top of the current change (jj new @).",
+                        ))
+                        .on_click(move |_, window, cx| {
+                            if !crate::jj_bookmark_picker::ensure_saved_buffers(
+                                &new_change_workspace,
+                                cx,
+                            ) {
+                                return;
+                            }
+                            new_change_store
+                                .update(cx, |store, cx| store.new_change(cx))
+                                .detach_and_prompt_err(
+                                    "Failed to create jj change",
+                                    window,
+                                    cx,
+                                    |_, _, _| None,
+                                );
+                        }),
                 )
                 .child(
                     Button::new("jj_snapshot", "Snapshot working copy")
@@ -9629,6 +9655,39 @@ impl Render for GitPanel {
                                     cx,
                                     |_, _, _| None,
                                 );
+                        }),
+                )
+                .child(
+                    Button::new("jj_current_diff", "Open current change diff").on_click(
+                        |_, window, cx| {
+                            window.dispatch_action(Box::new(crate::OpenCurrentChangeDiff), cx)
+                        },
+                    ),
+                )
+                .child(Button::new("jj_change_diff", "Open change diff…").on_click(
+                    |_, window, cx| window.dispatch_action(Box::new(crate::OpenChangeDiff), cx),
+                ))
+                .child(
+                    Button::new("jj_bookmark_diff", "Changes since bookmark ancestor…").on_click(
+                        |_, window, cx| {
+                            window.dispatch_action(Box::new(crate::CompareWithBookmark), cx)
+                        },
+                    ),
+                )
+                .child(
+                    Button::new(
+                        "jj_live_bookmark_diff",
+                        "Compare working copy with bookmark…",
+                    )
+                    .on_click(|_, window, cx| {
+                        window.dispatch_action(Box::new(crate::CompareWorkingCopyWithBookmark), cx)
+                    }),
+                )
+                .child(
+                    Button::new("jj_live_change_diff", "Compare working copy with change…")
+                        .on_click(|_, window, cx| {
+                            window
+                                .dispatch_action(Box::new(crate::CompareWorkingCopyWithChange), cx)
                         }),
                 )
                 .into_any_element();

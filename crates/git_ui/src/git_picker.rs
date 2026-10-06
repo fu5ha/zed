@@ -520,7 +520,7 @@ fn open_with_tab(
             return;
         }
         workspace.toggle_modal(window, cx, |window, cx| {
-            crate::jj_bookmark_picker::modal(jj, window, cx)
+            crate::jj_bookmark_picker::modal(jj, workspace_handle, window, cx)
         });
         return;
     }

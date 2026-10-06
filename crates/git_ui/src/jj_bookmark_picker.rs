@@ -1,9 +1,10 @@
-use git::jj::JjBookmark;
-use gpui::{App, DismissEvent, Entity, Subscription, Task, Window};
+use git::jj::{JjBookmark, JjRevision};
+use gpui::{App, DismissEvent, Entity, Subscription, Task, WeakEntity, Window};
 use picker::{Picker, PickerDelegate};
 use project::jj_store::JjStore;
 use std::sync::Arc;
 use ui::{ListItem, ListItemSpacing, prelude::*};
+use workspace::{Workspace, notifications::DetachAndPromptErr};
 
 #[derive(Clone)]
 pub struct JjBookmarkSelection {
@@ -14,7 +15,7 @@ pub struct JjBookmarkSelection {
 pub type BookmarkSelectionHandler = Box<dyn Fn(JjBookmarkSelection, &mut Window, &mut App)>;
 
 struct BookmarkRow {
-    bookmark: JjBookmark,
+    bookmark: Option<JjBookmark>,
     commit_id: Option<String>,
     label: String,
     detail: String,
@@ -26,20 +27,40 @@ pub fn popover(
     window: &mut Window,
     cx: &mut App,
 ) -> Entity<Picker<JjBookmarkDelegate>> {
-    cx.new(|cx| new(store, on_select, true, window, cx))
+    cx.new(|cx| new(store, on_select, None, true, window, cx))
+}
+
+pub fn switch_popover(
+    store: Entity<JjStore>,
+    workspace: WeakEntity<Workspace>,
+    window: &mut Window,
+    cx: &mut App,
+) -> Entity<Picker<JjBookmarkDelegate>> {
+    cx.new(|cx| new(store, None, Some(workspace), true, window, cx))
 }
 
 pub fn modal(
     store: Entity<JjStore>,
+    workspace: WeakEntity<Workspace>,
     window: &mut Window,
     cx: &mut Context<Picker<JjBookmarkDelegate>>,
 ) -> Picker<JjBookmarkDelegate> {
-    new(store, None, false, window, cx)
+    new(store, None, Some(workspace), false, window, cx)
+}
+
+pub fn selection_modal(
+    store: Entity<JjStore>,
+    on_select: BookmarkSelectionHandler,
+    window: &mut Window,
+    cx: &mut Context<Picker<JjBookmarkDelegate>>,
+) -> Picker<JjBookmarkDelegate> {
+    new(store, Some(on_select), None, false, window, cx)
 }
 
 fn new(
     store: Entity<JjStore>,
     on_select: Option<BookmarkSelectionHandler>,
+    workspace: Option<WeakEntity<Workspace>>,
     is_popover: bool,
     window: &mut Window,
     cx: &mut Context<Picker<JjBookmarkDelegate>>,
@@ -56,6 +77,7 @@ fn new(
         selected_index: 0,
         empty_message: String::new(),
         on_select,
+        workspace,
         _subscription: subscription,
     };
     delegate.refresh(cx);
@@ -73,6 +95,7 @@ pub struct JjBookmarkDelegate {
     selected_index: usize,
     empty_message: String,
     on_select: Option<BookmarkSelectionHandler>,
+    workspace: Option<WeakEntity<Workspace>>,
     _subscription: Subscription,
 }
 
@@ -82,13 +105,7 @@ impl JjBookmarkDelegate {
             .matches
             .get(self.selected_index)
             .and_then(|index| self.rows.get(*index))
-            .map(|row| {
-                (
-                    row.bookmark.name.clone(),
-                    row.bookmark.remote.clone(),
-                    row.commit_id.clone(),
-                )
-            });
+            .map(|row| (row.label.clone(), row.commit_id.clone()));
         let state = self.store.read(cx);
         self.rows.clear();
         self.empty_message = state
@@ -120,7 +137,7 @@ impl JjBookmarkDelegate {
                 };
                 if bookmark.targets.is_empty() {
                     self.rows.push(BookmarkRow {
-                        bookmark: bookmark.clone(),
+                        bookmark: Some(bookmark.clone()),
                         commit_id: None,
                         label,
                         detail: if bookmark.conflict {
@@ -143,7 +160,7 @@ impl JjBookmarkDelegate {
                             ""
                         };
                         self.rows.push(BookmarkRow {
-                            bookmark: bookmark.clone(),
+                            bookmark: Some(bookmark.clone()),
                             commit_id: Some(target.clone()),
                             label: label.clone(),
                             detail: format!("{kind} · {short_target}{conflict}{current}"),
@@ -154,21 +171,68 @@ impl JjBookmarkDelegate {
         }
         self.rows.sort_by(|left, right| {
             left.bookmark
-                .remote
-                .is_some()
-                .cmp(&right.bookmark.remote.is_some())
+                .as_ref()
+                .is_some_and(|bookmark| bookmark.remote.is_some())
+                .cmp(
+                    &right
+                        .bookmark
+                        .as_ref()
+                        .is_some_and(|bookmark| bookmark.remote.is_some()),
+                )
                 .then_with(|| left.label.cmp(&right.label))
                 .then_with(|| left.commit_id.cmp(&right.commit_id))
         });
+        if self.workspace.is_some() {
+            if let Some(snapshot) = &state.snapshot {
+                let mut changes = snapshot.nearby_changes.iter().collect::<Vec<_>>();
+                changes.retain(|revision| revision.commit_id != snapshot.revision.commit_id);
+                changes.insert(0, &snapshot.revision);
+                let mut rows = changes
+                    .into_iter()
+                    .map(|revision| {
+                        let change_id = revision.change_id.chars().take(8).collect::<String>();
+                        BookmarkRow {
+                            bookmark: None,
+                            commit_id: Some(revision.commit_id.clone()),
+                            label: format!("{change_id} · {}", change_description(revision)),
+                            detail: change_detail(
+                                revision,
+                                &snapshot.revision,
+                                &snapshot.nearby_changes,
+                            ),
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                rows.append(&mut self.rows);
+                if let Some(error) = &snapshot.bookmark_error {
+                    rows.push(BookmarkRow {
+                        bookmark: None,
+                        commit_id: None,
+                        label: "Bookmarks unavailable".into(),
+                        detail: error.clone(),
+                    });
+                }
+                self.rows = rows;
+                if let Some(error) = &snapshot.change_error {
+                    self.rows.insert(
+                        0,
+                        BookmarkRow {
+                            bookmark: None,
+                            commit_id: None,
+                            label: "Nearby changes unavailable".into(),
+                            detail: error.clone(),
+                        },
+                    );
+                }
+            }
+        }
         self.filter();
         self.selected_index = selected_target
-            .and_then(|(name, remote, commit_id)| {
+            .and_then(|(label, commit_id)| {
                 self.matches.iter().position(|index| {
-                    self.rows.get(*index).is_some_and(|row| {
-                        row.bookmark.name == name
-                            && row.bookmark.remote == remote
-                            && row.commit_id == commit_id
-                    })
+                    self.rows
+                        .get(*index)
+                        .is_some_and(|row| row.label == label && row.commit_id == commit_id)
                 })
             })
             .unwrap_or(0);
@@ -218,7 +282,9 @@ impl PickerDelegate for JjBookmarkDelegate {
     }
 
     fn placeholder_text(&self, _window: &mut Window, _cx: &mut App) -> Arc<str> {
-        if self.on_select.is_some() {
+        if self.workspace.is_some() {
+            "Switch jj change or bookmark…".into()
+        } else if self.on_select.is_some() {
             "Select a jj bookmark target…".into()
         } else {
             "Browse jj bookmarks (read-only)…".into()
@@ -229,7 +295,7 @@ impl PickerDelegate for JjBookmarkDelegate {
         Some(if self.rows.is_empty() {
             self.empty_message.clone().into()
         } else {
-            "No matching bookmarks".into()
+            "No matching changes or bookmarks".into()
         })
     }
 
@@ -254,7 +320,7 @@ impl PickerDelegate for JjBookmarkDelegate {
         self.matches
             .get(index)
             .and_then(|index| self.rows.get(*index))
-            .is_some_and(|row| self.on_select.is_none() || row.commit_id.is_some())
+            .is_some_and(|row| row.commit_id.is_some())
     }
 
     fn confirm(&mut self, _secondary: bool, window: &mut Window, cx: &mut Context<Picker<Self>>) {
@@ -265,13 +331,36 @@ impl PickerDelegate for JjBookmarkDelegate {
         else {
             return;
         };
-        if let Some(handler) = &self.on_select {
+        if let Some(workspace) = &self.workspace {
             let Some(commit_id) = row.commit_id.clone() else {
+                return;
+            };
+            if self
+                .store
+                .read(cx)
+                .snapshot
+                .as_ref()
+                .is_some_and(|snapshot| snapshot.revision.commit_id == commit_id)
+            {
+                cx.emit(DismissEvent);
+                return;
+            }
+            if !ensure_saved_buffers(workspace, cx) {
+                return;
+            }
+            self.store
+                .update(cx, |store, cx| store.edit_change(commit_id, cx))
+                .detach_and_prompt_err("Failed to switch jj change", window, cx, |_, _, _| None);
+        } else if let Some(handler) = &self.on_select {
+            let Some(commit_id) = row.commit_id.clone() else {
+                return;
+            };
+            let Some(bookmark) = row.bookmark.clone() else {
                 return;
             };
             handler(
                 JjBookmarkSelection {
-                    bookmark: row.bookmark.clone(),
+                    bookmark,
                     commit_id,
                 },
                 window,
@@ -293,7 +382,7 @@ impl PickerDelegate for JjBookmarkDelegate {
         _cx: &mut Context<Picker<Self>>,
     ) -> Option<Self::ListItem> {
         let row = self.rows.get(*self.matches.get(index)?)?;
-        let unavailable_target = self.on_select.is_some() && row.commit_id.is_none();
+        let unavailable_target = row.commit_id.is_none();
         Some(
             ListItem::new(index)
                 .inset(true)
@@ -312,5 +401,138 @@ impl PickerDelegate for JjBookmarkDelegate {
                         ),
                 ),
         )
+    }
+}
+
+pub(crate) fn change_description(revision: &JjRevision) -> String {
+    let description = revision
+        .description
+        .lines()
+        .next()
+        .filter(|description| !description.is_empty())
+        .unwrap_or("(no description)");
+    if revision.empty {
+        format!("(empty) {description}")
+    } else {
+        description.to_owned()
+    }
+}
+
+fn change_detail(revision: &JjRevision, current: &JjRevision, nearby: &[JjRevision]) -> String {
+    if revision.commit_id == current.commit_id {
+        return "Current change".into();
+    }
+    fn ancestor_distance(start: &JjRevision, target: &str, nearby: &[JjRevision]) -> Option<usize> {
+        let mut parents = start.parents.iter().map(String::as_str).collect::<Vec<_>>();
+        for distance in 1..=2 {
+            if parents.contains(&target) {
+                return Some(distance);
+            }
+            parents = parents
+                .into_iter()
+                .filter_map(|parent| nearby.iter().find(|revision| revision.commit_id == parent))
+                .flat_map(|revision| revision.parents.iter().map(String::as_str))
+                .collect();
+        }
+        None
+    }
+    if let Some(distance) = ancestor_distance(current, &revision.commit_id, nearby) {
+        format!("Ancestor · {distance} back")
+    } else if let Some(distance) = ancestor_distance(revision, &current.commit_id, nearby) {
+        format!("Descendant · {distance} ahead")
+    } else {
+        "Recent change".into()
+    }
+}
+
+pub(crate) fn ensure_saved_buffers(workspace: &WeakEntity<Workspace>, cx: &mut App) -> bool {
+    workspace
+        .update(cx, |workspace, cx| {
+            if workspace
+                .project()
+                .read(cx)
+                .dirty_buffers(cx)
+                .next()
+                .is_some()
+            {
+                workspace.show_error(
+                    "Save or discard unsaved files before changing the active jj change",
+                    cx,
+                );
+                false
+            } else {
+                true
+            }
+        })
+        .unwrap_or(false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn labels_empty_changes_independently_of_description() {
+        for (description, empty, expected) in [
+            ("", false, "(no description)"),
+            ("", true, "(empty) (no description)"),
+            ("A change\nMore details", false, "A change"),
+            ("A change\nMore details", true, "(empty) A change"),
+            ("\nMore details", true, "(empty) (no description)"),
+        ] {
+            let revision = JjRevision {
+                commit_id: String::new(),
+                change_id: String::new(),
+                description: description.into(),
+                empty,
+                parents: Vec::new(),
+            };
+            assert_eq!(change_description(&revision), expected);
+        }
+    }
+
+    #[test]
+    fn labels_changes_relative_to_working_copy() {
+        let revision = |commit_id: &str, parents: &[&str]| JjRevision {
+            commit_id: commit_id.into(),
+            change_id: commit_id.into(),
+            description: String::new(),
+            empty: false,
+            parents: parents.iter().map(|parent| (*parent).into()).collect(),
+        };
+        let grandparent = revision("grandparent", &[]);
+        let parent = revision("parent", &["grandparent"]);
+        let current = revision("current", &["parent"]);
+        let child = revision("child", &["current"]);
+        let grandchild = revision("grandchild", &["child"]);
+        let unrelated = revision("unrelated", &[]);
+        let nearby = vec![
+            grandparent.clone(),
+            parent.clone(),
+            current.clone(),
+            child.clone(),
+            grandchild.clone(),
+        ];
+        assert_eq!(change_detail(&current, &current, &nearby), "Current change");
+        assert_eq!(
+            change_detail(&parent, &current, &nearby),
+            "Ancestor · 1 back"
+        );
+        assert_eq!(
+            change_detail(&grandparent, &current, &nearby),
+            "Ancestor · 2 back"
+        );
+        assert_eq!(
+            change_detail(&child, &current, &nearby),
+            "Descendant · 1 ahead"
+        );
+        assert_eq!(
+            change_detail(&grandchild, &current, &nearby),
+            "Descendant · 2 ahead"
+        );
+        assert_eq!(
+            change_detail(&unrelated, &current, &nearby),
+            "Recent change"
+        );
     }
 }

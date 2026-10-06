@@ -25,6 +25,7 @@ async-channel.workspace = true
 buffer_diff.workspace = true
 call = { workspace = true, optional = true }
 client.workspace = true
+clock.workspace = true
 collections.workspace = true
 component.workspace = true
 db.workspace = true

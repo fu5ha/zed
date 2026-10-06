@@ -50,6 +50,8 @@ mod git_panel_settings;
 pub mod git_picker;
 mod git_runtime_diagnostics;
 pub mod jj_bookmark_picker;
+pub mod jj_diff;
+mod jj_diff_buffer_list;
 pub mod multi_diff_view;
 pub mod picker_prompt;
 pub mod project_diff;
@@ -69,6 +71,16 @@ gpui::actions!(
     [
         /// Snapshot saved working-copy contents into the current jj change without saving editor buffers.
         SnapshotWorkingCopy,
+        /// Open the current jj change against live disk and editor contents.
+        OpenCurrentChangeDiff,
+        /// Select a historical jj change to view its pinned diff.
+        OpenChangeDiff,
+        /// Compare the live workspace with a jj bookmark's common ancestor.
+        CompareWithBookmark,
+        /// Compare a selected jj bookmark's exact target with the live working copy.
+        CompareWorkingCopyWithBookmark,
+        /// Compare a selected pinned jj change with the live working copy.
+        CompareWorkingCopyWithChange,
     ]
 );
 
@@ -83,7 +95,7 @@ pub fn init(cx: &mut App) {
                 .as_ref()
                 .and_then(|repository| repository.read(cx).jj.clone())
             {
-                let picker = jj_bookmark_picker::popover(jj, None, window, cx);
+                let picker = jj_bookmark_picker::switch_popover(jj, workspace, window, cx);
                 return cx.new(|cx| git_ui_core::GitPickerPopover::new(picker, cx));
             }
             let picker = git_picker::popover(
@@ -111,28 +123,6 @@ pub fn init(cx: &mut App) {
                 return;
             };
             let git_store = workspace.project().read(cx).git_store().clone();
-            git_graph::open_or_reuse_graph(
-                workspace, repo_id, git_store, log_source, None, window, cx,
-            );
-        },
-        cx,
-    );
-
-    cx.observe_new(|editor: &mut Editor, _, cx| {
-        conflict_view::register_editor(editor, editor.buffer().clone(), cx);
-    })
-    .detach();
-
-    cx.observe_new(|workspace: &mut Workspace, _, cx| {
-        ProjectDiff::register(workspace, cx);
-        staged_diff::StagedDiff::register(workspace, cx);
-        unstaged_diff::UnstagedDiff::register(workspace, cx);
-        branch_diff::BranchDiff::register(workspace, cx);
-        CommitModal::register(workspace);
-        git_panel::register(workspace);
-        repository_selector::register(workspace);
-        git_picker::register(workspace);
-        let git_store = workspace.project().read(cx).git_store().clone();
             git_graph::open_or_reuse_graph(
                 workspace, repo_id, git_store, log_source, None, window, cx,
             );
@@ -189,6 +179,28 @@ pub fn init(cx: &mut App) {
             }
         })
         .detach();
+        workspace.register_action(|workspace, _: &OpenCurrentChangeDiff, window, cx| {
+            jj_diff::JjDiffView::open(workspace, jj_diff::Comparison::Current, window, cx);
+        });
+        workspace.register_action(|workspace, _: &OpenChangeDiff, window, cx| {
+            jj_diff::open_change_picker(workspace, window, cx);
+        });
+        workspace.register_action(|workspace, _: &CompareWithBookmark, window, cx| {
+            jj_diff::open_bookmark_picker(workspace, jj_diff::Comparison::Bookmark, window, cx);
+        });
+        workspace.register_action(
+            |workspace, _: &CompareWorkingCopyWithBookmark, window, cx| {
+                jj_diff::open_bookmark_picker(
+                    workspace,
+                    jj_diff::Comparison::WorkingCopyBookmark,
+                    window,
+                    cx,
+                );
+            },
+        );
+        workspace.register_action(|workspace, _: &CompareWorkingCopyWithChange, window, cx| {
+            jj_diff::open_working_copy_change_picker(workspace, window, cx);
+        });
         workspace.register_action(|workspace, _: &SnapshotWorkingCopy, window, cx| {
             let Some(jj) = workspace
                 .project()

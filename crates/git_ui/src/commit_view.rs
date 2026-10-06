@@ -1146,7 +1146,7 @@ pub(crate) async fn build_buffer(
     Ok(buffer)
 }
 
-async fn build_buffer_diff(
+pub(crate) async fn build_buffer_diff(
     mut old_text: Option<String>,
     buffer: &Entity<Buffer>,
     language_registry: &Arc<LanguageRegistry>,
