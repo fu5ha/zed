@@ -7,6 +7,7 @@ upstreamed.
 
 The purpose of the fork is to add features I want that are unlikely to be upstreamable. So far that is:
 1. Minimal useful jujutsu source control integration
+2. Pi Inbox inline source discussions backed by the shared `inbx` Rust core
 
 ## Source Control
 

@@ -6,6 +6,8 @@ use ::git::{
     status::FileStatus,
 };
 use buffer_diff::{BufferDiff, DiffHunkStatus, DiffHunkStatusKind};
+use feature_flags::{DiffReviewFeatureFlag, FeatureFlagAppExt as _};
+use project::DisableAiSettings;
 use project::git_store::Repository;
 
 #[derive(Clone)]
@@ -154,6 +156,7 @@ pub(super) struct PhantomDiffReviewIndicator {
 pub(super) struct DiffReviewDragState {
     start_anchor: Anchor,
     current_anchor: Anchor,
+    is_inbox: bool,
 }
 
 /// Identifies a specific hunk in the diff buffer.
@@ -1022,6 +1025,19 @@ impl Editor {
         self.show_diff_review_button
     }
 
+    pub(super) fn can_review_in_gutter(&self, cx: &App) -> bool {
+        self.show_diff_review_button()
+            && cx.has_flag::<DiffReviewFeatureFlag>()
+            && !DisableAiSettings::is_ai_disabled_for_buffer(
+                self.buffer.read(cx).as_singleton().as_ref(),
+                cx,
+            )
+    }
+
+    pub(super) fn is_inbox_gutter(&self, cx: &App) -> bool {
+        !self.can_review_in_gutter(cx) && crate::inbox::can_comment(self, cx)
+    }
+
     pub(super) fn render_diff_review_button(
         &self,
         display_row: DisplayRow,
@@ -1030,6 +1046,11 @@ impl Editor {
     ) -> impl IntoElement {
         let text_color = cx.theme().colors().text;
         let icon_color = cx.theme().colors().icon_accent;
+        let tooltip = if self.is_inbox_gutter(cx) {
+            "Pi Inbox: Add Thread (drag to select multiple lines)"
+        } else {
+            "Add Review (drag to select multiple lines)"
+        };
 
         h_flex()
             .id("diff_review_button")
@@ -1046,7 +1067,7 @@ impl Editor {
                     .border_color(icon_color.opacity(0.5))
             })
             .child(Icon::new(IconName::Plus).size(IconSize::Small))
-            .tooltip(Tooltip::text("Add Review (drag to select multiple lines)"))
+            .tooltip(Tooltip::text(tooltip))
             .on_mouse_down(
                 gpui::MouseButton::Left,
                 cx.listener(move |editor, _event: &gpui::MouseDownEvent, window, cx| {
@@ -1062,13 +1083,22 @@ impl Editor {
         cx: &mut Context<Self>,
     ) {
         let snapshot = self.snapshot(window, cx);
-        let point = snapshot
-            .display_snapshot
-            .display_point_to_point(DisplayPoint::new(display_row, 0), Bias::Left);
-        let anchor = snapshot.buffer_snapshot().anchor_before(point);
+        let is_inbox = self.is_inbox_gutter(cx);
+        let display_point = display_row.as_display_point();
+        let anchor = if is_inbox {
+            snapshot
+                .display_snapshot
+                .display_point_to_anchor(display_point, Bias::Left)
+        } else {
+            let point = snapshot
+                .display_snapshot
+                .display_point_to_point(display_point, Bias::Left);
+            snapshot.buffer_snapshot().anchor_before(point)
+        };
         self.diff_review_drag_state = Some(DiffReviewDragState {
             start_anchor: anchor,
             current_anchor: anchor,
+            is_inbox,
         });
         cx.notify();
     }
@@ -1079,14 +1109,24 @@ impl Editor {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.diff_review_drag_state.is_none() {
+        let Some(is_inbox) = self
+            .diff_review_drag_state
+            .as_ref()
+            .map(|state| state.is_inbox)
+        else {
             return;
-        }
+        };
         let snapshot = self.snapshot(window, cx);
-        let point = snapshot
-            .display_snapshot
-            .display_point_to_point(display_row.as_display_point(), Bias::Left);
-        let anchor = snapshot.buffer_snapshot().anchor_before(point);
+        let anchor = if is_inbox {
+            snapshot
+                .display_snapshot
+                .display_point_to_anchor(display_row.as_display_point(), Bias::Left)
+        } else {
+            let point = snapshot
+                .display_snapshot
+                .display_point_to_point(display_row.as_display_point(), Bias::Left);
+            snapshot.buffer_snapshot().anchor_before(point)
+        };
         if let Some(drag_state) = &mut self.diff_review_drag_state {
             drag_state.current_anchor = anchor;
             cx.notify();
@@ -1097,7 +1137,15 @@ impl Editor {
         if let Some(drag_state) = self.diff_review_drag_state.take() {
             let snapshot = self.snapshot(window, cx);
             let range = drag_state.row_range(&snapshot.display_snapshot);
-            self.show_diff_review_overlay(*range.start()..*range.end(), window, cx);
+            if drag_state.is_inbox {
+                self.add_inbox_thread_for_display_range(
+                    *range.start()..DisplayRow(range.end().0.saturating_add(1)),
+                    window,
+                    cx,
+                );
+            } else {
+                self.show_diff_review_overlay(*range.start()..*range.end(), window, cx);
+            }
         }
         cx.notify();
     }

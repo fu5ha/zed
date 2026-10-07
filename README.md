@@ -24,6 +24,27 @@ Other platforms are not yet available:
 - [Building Zed for Linux](./docs/src/development/linux.md)
 - [Building Zed for Windows](./docs/src/development/windows.md)
 
+### Pi Inbox in this fork
+
+Select lines in a saved local file and use **Inbox: Add Thread** in the command
+palette or context menu, or drag the gutter **+** to select lines. Post Markdown,
+read agent replies inline, edit your own messages, and resolve/reopen discussions.
+Use **Inbox: Show Threads**, **Inbox: Toggle Resolved**, and **Inbox: Refresh** to
+browse and manage the shared inbox. Enter posts or saves an edit; Shift+Enter
+adds a newline. Escape cancels a draft or edit.
+
+Posting saves immediately; run `/check-inbox` in pi to request an agent reply.
+The database defaults to `~/.pi/agent/data/pi-inbox/messages.sqlite`; set
+`pi_inbox.agent_dir` in user settings or `PI_CODING_AGENT_DIR` to share another pi
+agent directory. `PI_INBOX_DATABASE` overrides the database path. Restart Zed after
+changing the directory or environment variables. `pi_inbox.enabled` disables the
+feature; `pi_inbox.show_status_button` hides its status button.
+Legacy schemas are rejected, never reset. Unmatched anchors remain file-level
+discussions. Remote projects, historical/deleted-side comments, and cross-file
+selections are not supported.
+
+Building this fork requires the shared Rust core at `../pi-inbox/crates/inbx`.
+
 ### Contributing
 
 See [CONTRIBUTING.md](./CONTRIBUTING.md) for ways you can contribute to Zed.

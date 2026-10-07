@@ -2,7 +2,6 @@ use std::ops::Range;
 use std::time::{Duration, Instant};
 
 use collections::HashMap;
-use feature_flags::{DiffReviewFeatureFlag, FeatureFlagAppExt as _};
 use gpui::{
     AnyElement, App, AvailableSpace, ClickEvent, Context, DispatchPhase, Element, MouseButton,
     MouseClickEvent, MouseDownEvent, MouseMoveEvent, MousePressureEvent, MouseUpEvent,
@@ -10,7 +9,6 @@ use gpui::{
     point, px,
 };
 use multi_buffer::MultiBufferRow;
-use project::DisableAiSettings;
 use settings::Settings;
 use sum_tree::Bias;
 use text::SelectionGoal;
@@ -112,13 +110,17 @@ impl EditorElement {
             }
         }
 
-        // Handle diff review indicator when gutter is hovered in diff mode with AI enabled
-        let show_diff_review = editor.show_diff_review_button()
-            && cx.has_flag::<DiffReviewFeatureFlag>()
-            && !DisableAiSettings::is_ai_disabled_for_buffer(
-                editor.buffer.read(cx).as_singleton().as_ref(),
-                cx,
-            );
+        let inbox_available = editor.is_inbox_gutter(cx);
+        let show_diff_review = if inbox_available {
+            split_side != Some(SplitSide::Left)
+                && !position_map
+                    .snapshot
+                    .row_infos(valid_point.row())
+                    .next()
+                    .is_some_and(|info| info.diff_status.is_some_and(|status| status.is_deleted()))
+        } else {
+            editor.can_review_in_gutter(cx)
+        };
 
         let diff_review_indicator = if gutter_hovered && show_diff_review {
             let is_visible = editor
@@ -363,6 +365,7 @@ impl EditorElement {
             let position_map = layout.position_map.clone();
             let editor = self.editor.clone();
             let line_numbers = layout.line_numbers.clone();
+            let split_side = self.split_side;
 
             move |event: &MouseDownEvent, phase, window, cx| {
                 if phase == DispatchPhase::Bubble {
@@ -385,7 +388,14 @@ impl EditorElement {
                             );
                         }),
                         MouseButton::Right => editor.update(cx, |editor, cx| {
-                            Self::mouse_right_down(editor, event, &position_map, window, cx);
+                            Self::mouse_right_down(
+                                editor,
+                                event,
+                                &position_map,
+                                split_side,
+                                window,
+                                cx,
+                            );
                         }),
                         MouseButton::Middle => editor.update(cx, |editor, cx| {
                             Self::mouse_middle_down(editor, event, &position_map, window, cx);
@@ -806,6 +816,7 @@ impl EditorElement {
         editor: &mut Editor,
         event: &MouseDownEvent,
         position_map: &PositionMap,
+        split_side: Option<SplitSide>,
         window: &mut Window,
         cx: &mut Context<Editor>,
     ) {
@@ -834,10 +845,11 @@ impl EditorElement {
         }
 
         let point_for_position = position_map.point_for_position(event.position);
-        mouse_context_menu::deploy_context_menu(
+        mouse_context_menu::deploy_context_menu_with_inbox(
             editor,
             Some(event.position),
             point_for_position.nearest_valid,
+            split_side != Some(SplitSide::Left),
             window,
             cx,
         );

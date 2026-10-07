@@ -7,6 +7,15 @@
 // keymaps, giving it the highest precedence of all the bindings set by us.
 [
   {
+    "context": "PiInboxComposer",
+    "bindings": {
+      "enter": "inbox::Post",
+      "shift-enter": "editor::Newline",
+      "ctrl-enter": "inbox::Post",
+      "escape": "inbox::CancelComposer",
+    },
+  },
+  {
     "context": "Picker > Editor",
     "bindings": {
       "ctrl-shift-a": "picker::ToggleActionsMenu",

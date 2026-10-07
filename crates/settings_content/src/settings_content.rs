@@ -210,6 +210,9 @@ pub struct SettingsContent {
     pub agent: Option<AgentSettingsContent>,
     pub agent_servers: Option<AllAgentServersSettings>,
 
+    /// Settings for the shared pi inbox.
+    pub pi_inbox: Option<PiInboxSettingsContent>,
+
     /// Configuration of audio in Zed.
     pub audio: Option<AudioSettingsContent>,
 
@@ -337,6 +340,26 @@ pub struct SettingsContent {
     pub instrumentation: Option<InstrumentationSettingsContent>,
 }
 
+#[with_fallible_options]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema, MergeFrom)]
+pub struct PiInboxSettingsContent {
+    /// Whether the pi inbox integration is enabled.
+    ///
+    /// Default: true
+    pub enabled: Option<bool>,
+
+    /// Whether to show the pi inbox button in the status bar.
+    ///
+    /// Default: true
+    pub show_status_button: Option<bool>,
+
+    /// The pi agent directory containing data/pi-inbox/messages.sqlite.
+    /// Requires restarting Zed after changing. Only user settings apply;
+    /// project-local settings cannot redirect the shared inbox database.
+    /// When unset, uses PI_CODING_AGENT_DIR or ~/.pi/agent.
+    pub agent_dir: Option<String>,
+}
+
 /// Configuration for developer-oriented instrumentation tools that collect
 /// diagnostic data about a running Zed instance.
 #[with_fallible_options]
@@ -406,7 +429,7 @@ fallible_options::flattened_deserialize!(SettingsContent {
     sections: { project, theme, extension, workspace, editor, remote },
     options: {
         call_hierarchy, command_palette, file_finder, git_panel, tabs, tab_bar, tab_switcher, status_bar, preview_tabs, agent,
-        agent_servers, audio, auto_update, base_keymap, collaboration_panel, debugger, diagnostics,
+        agent_servers, pi_inbox, audio, auto_update, base_keymap, collaboration_panel, debugger, diagnostics,
         git,
         global_lsp_settings, image_viewer, markdown_preview, repl, helix_mode, hide_mouse,
         journal, log, line_indicator_format, language_models, copilot, outline_panel, project_panel,

@@ -34,6 +34,10 @@ pub mod hover_popover;
 mod indent_guides;
 mod inlays;
 mod inline_input;
+pub mod inbox;
+mod inbox_browser;
+mod inbox_store;
+mod inbox_settings;
 pub mod items;
 mod jsx_tag_auto_close;
 mod linked_editing_ranges;
@@ -362,6 +366,7 @@ impl Navigated {
 }
 
 pub fn init(cx: &mut App) {
+    inbox::init(cx);
     cx.set_global(GlobalBlameRenderer(Arc::new(())));
     cx.set_global(breadcrumbs::RenderBreadcrumbText(render_breadcrumb_text));
 

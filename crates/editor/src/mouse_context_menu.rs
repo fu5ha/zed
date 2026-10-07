@@ -162,6 +162,17 @@ pub fn deploy_context_menu(
     window: &mut Window,
     cx: &mut Context<Editor>,
 ) {
+    deploy_context_menu_with_inbox(editor, position, point, true, window, cx);
+}
+
+pub(crate) fn deploy_context_menu_with_inbox(
+    editor: &mut Editor,
+    position: Option<Point<Pixels>>,
+    point: DisplayPoint,
+    allow_inbox: bool,
+    window: &mut Window,
+    cx: &mut Context<Editor>,
+) {
     if !editor.is_focused(window) {
         window.focus(&editor.focus_handle(cx), cx);
     }
@@ -224,6 +235,12 @@ pub fn deploy_context_menu(
             editor.buffer.read(cx).as_singleton().as_ref(),
             cx,
         );
+        let inbox_available = allow_inbox
+            && crate::inbox::can_comment(editor, cx)
+            && !display_map
+                .row_infos(point.row())
+                .next()
+                .is_some_and(|info| info.diff_status.is_some_and(|status| status.is_deleted()));
 
         let is_markdown = editor
             .buffer()
@@ -293,6 +310,12 @@ pub fn deploy_context_menu(
                 )
                 .when(!disable_ai && has_selections, |this| {
                     this.action("Add to Agent Thread", Box::new(AddSelectionToThread))
+                })
+                .when(inbox_available, |this| {
+                    this.action(
+                        "Pi Inbox: Add Thread at Selection",
+                        Box::new(crate::inbox::AddThread),
+                    )
                 })
                 .separator()
                 .action("Cut", Box::new(Cut))

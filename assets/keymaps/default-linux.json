@@ -1,4 +1,5 @@
 [
+  // Pi Inbox composer overrides live in specific-overrides.json so base keymaps cannot replace Enter-to-send.
   // Standard Linux bindings
   {
     "bindings": {

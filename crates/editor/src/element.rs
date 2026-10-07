@@ -39,7 +39,6 @@ use crate::{
 };
 use buffer_diff::{DiffHunkStatus, DiffHunkStatusKind};
 use collections::{BTreeMap, BTreeSet, HashMap, HashSet};
-use feature_flags::{DiffReviewFeatureFlag, FeatureFlagAppExt as _};
 use git::{Oid, blame::BlameEntry, commit::ParsedCommitMessage};
 use gpui::{
     Action, Along, AnyElement, App, AppContext, AvailableSpace, Axis as ScrollbarAxis, BorderStyle,
@@ -2662,12 +2661,12 @@ impl EditorElement {
         snapshot: &EditorSnapshot,
         cx: &App,
     ) -> Option<(DisplayRow, Option<u32>)> {
-        if !cx.has_flag::<DiffReviewFeatureFlag>() {
+        let editor = self.editor.read(cx);
+        let inbox_available = editor.is_inbox_gutter(cx);
+        if inbox_available && self.split_side == Some(SplitSide::Left) {
             return None;
         }
-
-        let show_diff_review_button = self.editor.read(cx).show_diff_review_button();
-        if !show_diff_review_button {
+        if !inbox_available && !editor.can_review_in_gutter(cx) {
             return None;
         }
 
@@ -2683,6 +2682,12 @@ impl EditorElement {
         let row_index = (display_row.0.saturating_sub(range.start.0)) as usize;
 
         let row_info = row_infos.get(row_index);
+        if inbox_available
+            && row_info
+                .is_some_and(|info| info.diff_status.is_some_and(|status| status.is_deleted()))
+        {
+            return None;
+        }
         if row_info.is_some_and(|row_info| row_info.expand_info.is_some()) {
             return None;
         }
