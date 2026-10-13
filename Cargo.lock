@@ -8746,6 +8746,7 @@ checksum = "e7c5cedc30da3a610cac6b4ba17597bdf7152cf974e8aab3afb3d54455e371c8"
 [[package]]
 name = "inbx"
 version = "0.1.0"
+source = "git+https://github.com/fu5ha/pi-inbox?rev=9eb3d800247ce983ee6d3d844f341e0b2482483f#9eb3d800247ce983ee6d3d844f341e0b2482483f"
 dependencies = [
  "libc",
  "rusqlite",

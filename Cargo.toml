@@ -343,7 +343,7 @@ edit_prediction_metrics = { path = "crates/edit_prediction_metrics", features = 
 edit_prediction_types = { path = "crates/edit_prediction_types" }
 edit_prediction_ui = { path = "crates/edit_prediction_ui" }
 editor = { path = "crates/editor" }
-inbx = { path = "../pi-inbox/crates/inbx" }
+inbx = { git = "https://github.com/fu5ha/pi-inbox", rev = "9eb3d800247ce983ee6d3d844f341e0b2482483f" }
 encoding_selector = { path = "crates/encoding_selector" }
 env_var = { path = "crates/env_var" }
 etw_tracing = { path = "crates/etw_tracing" }

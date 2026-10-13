@@ -43,7 +43,14 @@ Legacy schemas are rejected, never reset. Unmatched anchors remain file-level
 discussions. Remote projects, historical/deleted-side comments, and cross-file
 selections are not supported.
 
-Building this fork requires the shared Rust core at `../pi-inbox/crates/inbx`.
+This fork depends on the shared Rust core `inbx` from
+[pi-inbox](https://github.com/fu5ha/pi-inbox), pinned by git revision in the
+workspace `Cargo.toml`. To develop against a local pi-inbox checkout instead,
+add a paths override pointing at it (e.g. in a local-only change to
+`.cargo/config.toml`): `paths = ["../pi-inbox/crates/inbx"]`. To integrate
+a new pi-inbox revision, push pi-inbox, bump the pinned `rev` in the
+workspace `Cargo.toml`, and re-lock
+(`cargo update -w`).
 
 ### Contributing
 
